@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Etiquetas Eminent</title>
+<style>
+  :root { --bg:#f4f5f2; --card:#fff; --ink:#1d2320; --muted:#5d6661; --accent:#1f6f4a; --danger:#a33a32; --line:#d9ddd7; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.4 system-ui, sans-serif; }
+  main { max-width:560px; margin:0 auto; padding:16px; display:grid; gap:12px; }
+  h1 { font-size:1.2rem; margin:4px 0; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; display:grid; gap:10px; }
+  h2 { font-size:1rem; margin:0; }
+  button { min-height:48px; border:0; border-radius:8px; font:inherit; font-weight:700; background:#e8ece8; color:var(--ink); }
+  button.principal { background:var(--accent); color:#fff; }
+  button:disabled { opacity:.55; }
+  .estado { color:var(--muted); font-size:.92rem; margin:0; }
+  .estado.error { color:var(--danger); font-weight:700; }
+  .lista { margin:0; padding-left:18px; }
+  pre { margin:0; max-height:220px; overflow:auto; background:#f7f7f5; border:1px solid var(--line); border-radius:8px; padding:8px; font-size:.78rem; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Impresora de etiquetas &middot; Eminent</h1>
+
+  <section id="lote" hidden>
+    <h2>Etiquetas para imprimir</h2>
+    <ul class="lista" id="loteLista"></ul>
+    <button class="principal" id="imprimirLote" type="button">Imprimir</button>
+    <p class="estado" id="loteEstado"></p>
+  </section>
+
+  <section>
+    <h2>Impresora USB</h2>
+    <p class="estado" id="soporte"></p>
+    <button id="conectar" type="button">Conectar impresora</button>
+    <button id="prueba" type="button">Imprimir etiqueta de prueba</button>
+    <button id="autoprueba" type="button">Autoprueba (comando TSPL)</button>
+    <p class="estado" id="estado"></p>
+  </section>
+
+  <section>
+    <h2>Detalle</h2>
+    <pre id="registro"></pre>
+  </section>
+</main>
+<script>
+'use strict';
+// Etiqueta de 45 x 25 mm a 203 dpi: 360 x 200 puntos. La app de Eminent manda
+// cada etiqueta ya armada (nombre, numero del codigo, pie y copias): esta pagina
+// no calcula nada, solo la dibuja en TSPL y la manda por USB.
+var ANCHO = 360;
+var ALTO = 200;
+
+function registrar(texto) {
+  var pre = document.getElementById('registro');
+  pre.textContent += new Date().toLocaleTimeString() + '  ' + texto + '\n';
+  pre.scrollTop = pre.scrollHeight;
+}
+
+function mostrar(id, texto, error) {
+  var el = document.getElementById(id);
+  el.textContent = texto;
+  el.className = 'estado' + (error ? ' error' : '');
+}
+
+// Las fuentes de la impresora solo tienen ASCII: sin tildes, la enie como N.
+function limpiar(texto) {
+  return String(texto == null ? '' : texto).normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^\x20-\x7e]/g, '?').replace(/"/g, "'").replace(/\s+/g, ' ').trim();
+}
+
+// Hasta dos lineas de maximo caracteres; si no entra, la segunda termina en '...'.
+function partir(texto, maximo) {
+  var lineas = [];
+  texto.split(' ').forEach(function(palabra) {
+    var ultima = lineas.length ? lineas[lineas.length - 1] : null;
+    if (ultima !== null && (ultima + ' ' + palabra).length <= maximo) lineas[lineas.length - 1] = ultima + ' ' + palabra;
+    else lineas.push(palabra.slice(0, maximo));
+  });
+  if (lineas.length > 2) lineas = [lineas[0], (lineas.slice(1).join(' ')).slice(0, maximo - 3) + '...'];
+  return lineas;
+}
+
+function textoCentrado(texto, y, fuente, anchoLetra) {
+  var x = Math.max(0, Math.round((ANCHO - texto.length * anchoLetra) / 2));
+  return 'TEXT ' + x + ',' + y + ',"' + fuente + '",0,1,1,"' + texto + '"\r\n';
+}
+
+// Code 128: 11 modulos por simbolo (mas 2 del stop); con digitos de largo par
+// la impresora usa el subset C (dos digitos por simbolo). Modulo de 3 puntos.
+function anchoCodigo(codigo) {
+  var simbolos = /^\d+$/.test(codigo) && codigo.length % 2 === 0 ? codigo.length / 2 : codigo.length;
+  return ((simbolos + 3) * 11 + 2) * 3;
+}
+
+// et = { n: nombre, c: numero del codigo, p: "encargado - fecha", k: copias }
+function tsplEtiqueta(et) {
+  var nombre = limpiar(et.n);
+  var codigo = limpiar(et.c);
+  var copias = Math.max(1, Math.min(200, Math.floor(Number(et.k)) || 1));
+  var corto = nombre.length <= 22;
+  var fuente = corto ? '3' : '2';
+  var letra = corto ? 16 : 12;
+  var alto = corto ? 24 : 20;
+  var lineas = partir(nombre, corto ? 22 : 30);
+  var s = 'SIZE 45 mm,25 mm\r\nGAP 2 mm,0 mm\r\nDIRECTION 1\r\nREFERENCE 0,0\r\nCLS\r\n';
+  lineas.forEach(function(linea, i) { s += textoCentrado(linea, 6 + i * (alto + 2), fuente, letra); });
+  var x = Math.max(0, Math.round((ANCHO - anchoCodigo(codigo)) / 2));
+  s += 'BARCODE ' + x + ',60,"128",64,0,0,3,3,"' + codigo + '"\r\n';
+  s += textoCentrado(codigo, 128, '2', 12);
+  s += textoCentrado(limpiar(et.p).slice(0, 30), 170, '2', 12);
+  s += 'PRINT 1,' + copias + '\r\n';
+  return s;
+}
+
+function bytes(texto) { return new TextEncoder().encode(texto); }
+
+// La primera impresora autorizada; si no hay, la lista de Chrome (necesita el toque).
+function obtenerImpresora() {
+  return navigator.usb.getDevices().then(function(lista) {
+    if (lista.length) return lista[0];
+    return navigator.usb.requestDevice({ filters: [] });
+  });
+}
+
+function describir(dev) {
+  var partes = [(dev.manufacturerName || '?') + ' ' + (dev.productName || '?'),
+    'vendorId 0x' + dev.vendorId.toString(16).padStart(4, '0') + ', productId 0x' + dev.productId.toString(16).padStart(4, '0')];
+  if (dev.configuration) {
+    dev.configuration.interfaces.forEach(function(intf) {
+      intf.alternates.forEach(function(alt) {
+        partes.push('interfaz ' + intf.interfaceNumber + ' clase ' + alt.interfaceClass + ': ' +
+          alt.endpoints.map(function(e) { return e.direction + '/' + e.type + ' #' + e.endpointNumber; }).join(', '));
+      });
+    });
+  }
+  return partes.join('\n');
+}
+
+// Busca el canal de salida (bulk out); prefiere la interfaz de impresora (clase 7).
+function canalSalida(dev) {
+  var elegido = null;
+  dev.configuration.interfaces.forEach(function(intf) {
+    intf.alternates.forEach(function(alt) {
+      var ep = alt.endpoints.filter(function(e) { return e.direction === 'out' && e.type === 'bulk'; })[0];
+      if (ep && (!elegido || alt.interfaceClass === 7)) elegido = { intf: intf, alt: alt, ep: ep };
+    });
+  });
+  return elegido;
+}
+
+function enviar(datos) {
+  var dev, canal;
+  return obtenerImpresora().then(function(d) {
+    dev = d;
+    return dev.opened ? null : dev.open();
+  }).then(function() {
+    return dev.configuration === null ? dev.selectConfiguration(1) : null;
+  }).then(function() {
+    registrar(describir(dev));
+    canal = canalSalida(dev);
+    if (!canal) throw new Error('La impresora no tiene canal de salida USB.');
+    return dev.claimInterface(canal.intf.interfaceNumber).catch(function(error) {
+      var e = new Error('No se pudo tomar la impresora: otra app la tiene (cerra NokoPrint) o Android no dio permiso. ' + error.message);
+      e.name = 'ClaimError';
+      throw e;
+    });
+  }).then(function() {
+    return canal.alt.alternateSetting ? dev.selectAlternateInterface(canal.intf.interfaceNumber, canal.alt.alternateSetting) : null;
+  }).then(function() {
+    return dev.transferOut(canal.ep.endpointNumber, datos);
+  }).then(function(resultado) {
+    registrar('Enviado: ' + resultado.bytesWritten + ' bytes, estado ' + resultado.status);
+    return dev.releaseInterface(canal.intf.interfaceNumber).catch(function() {});
+  }).then(function() {
+    return dev.close().catch(function() {});
+  }).catch(function(error) {
+    if (dev && dev.opened) dev.close().catch(function() {});
+    throw error;
+  });
+}
+
+function explicar(error) {
+  if (error.name === 'NotFoundError') return 'No se eligio ninguna impresora.';
+  if (error.name === 'SecurityError') return 'El navegador bloqueo el USB en esta pagina. Usa Chrome.';
+  return error.message || String(error);
+}
+
+function conBoton(boton, idEstado, accion) {
+  boton.disabled = true;
+  mostrar(idEstado, 'Enviando...', false);
+  accion().then(function() {
+    mostrar(idEstado, 'Listo.', false);
+  }).catch(function(error) {
+    registrar('Error ' + error.name + ': ' + error.message);
+    mostrar(idEstado, explicar(error), true);
+  }).then(function() { boton.disabled = false; });
+}
+
+// Datos que manda la app: #d=<base64url de JSON [{n,c,p,k}]> (UTF-8).
+function leerLote() {
+  var m = /[#&]d=([^&]+)/.exec(location.hash);
+  if (!m) return null;
+  try {
+    var b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+    var binario = atob(b64);
+    var u8 = new Uint8Array(binario.length);
+    for (var i = 0; i < binario.length; i += 1) u8[i] = binario.charCodeAt(i);
+    var lote = JSON.parse(new TextDecoder().decode(u8));
+    return Array.isArray(lote) && lote.length ? lote : null;
+  } catch (error) {
+    registrar('No se pudieron leer las etiquetas del link: ' + error.message);
+    return null;
+  }
+}
+
+(function iniciar() {
+  var soporte = 'usb' in navigator;
+  var politica = document.featurePolicy || document.permissionsPolicy;
+  var permitido = politica ? politica.allowsFeature('usb') : soporte;
+  mostrar('soporte', soporte && permitido
+    ? 'USB disponible en este navegador.'
+    : 'Este navegador no deja usar USB aca. Abri esta pagina en Chrome.', !(soporte && permitido));
+  ['conectar', 'prueba', 'autoprueba', 'imprimirLote'].forEach(function(id) {
+    document.getElementById(id).disabled = !(soporte && permitido);
+  });
+
+  document.getElementById('conectar').addEventListener('click', function() {
+    var boton = this;
+    boton.disabled = true;
+    navigator.usb.requestDevice({ filters: [] }).then(function(dev) {
+      return dev.open().then(function() {
+        return dev.configuration === null ? dev.selectConfiguration(1) : null;
+      }).then(function() {
+        registrar(describir(dev));
+        mostrar('estado', 'Conectada: ' + (dev.productName || 'impresora USB') + '.', false);
+        return dev.close();
+      });
+    }).catch(function(error) {
+      registrar('Error ' + error.name + ': ' + error.message);
+      mostrar('estado', explicar(error), true);
+    }).then(function() { boton.disabled = false; });
+  });
+
+  document.getElementById('prueba').addEventListener('click', function() {
+    var hoy = new Date();
+    var fecha = String(hoy.getDate()).padStart(2, '0') + '/' + String(hoy.getMonth() + 1).padStart(2, '0') + '/' + hoy.getFullYear();
+    var tspl = tsplEtiqueta({ n: 'PRUEBA EMINENT', c: '2123456789', p: 'Prueba - ' + fecha, k: 1 });
+    registrar(tspl.trim());
+    conBoton(this, 'estado', function() { return enviar(bytes(tspl)); });
+  });
+
+  document.getElementById('autoprueba').addEventListener('click', function() {
+    conBoton(this, 'estado', function() { return enviar(bytes('SELFTEST\r\n')); });
+  });
+
+  var lote = leerLote();
+  if (lote) {
+    var total = lote.reduce(function(t, et) { return t + Math.max(1, Math.floor(Number(et.k)) || 1); }, 0);
+    document.getElementById('lote').hidden = false;
+    var lista = document.getElementById('loteLista');
+    lote.forEach(function(et) {
+      var li = document.createElement('li');
+      li.textContent = et.n + ' x ' + (Math.max(1, Math.floor(Number(et.k)) || 1));
+      lista.appendChild(li);
+    });
+    document.getElementById('imprimirLote').textContent = 'Imprimir ' + total + ' etiqueta(s)';
+    document.getElementById('imprimirLote').addEventListener('click', function() {
+      var tspl = lote.map(tsplEtiqueta).join('');
+      conBoton(this, 'loteEstado', function() { return enviar(bytes(tspl)); });
+    });
+  }
+})();
+</script>
+</body>
+</html>
