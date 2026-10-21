@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Etiquetas Eminent</title>
+<title>Etiquetas</title>
 <style>
   :root { --bg:#f4f5f2; --card:#fff; --ink:#1d2320; --muted:#5d6661; --accent:#1f6f4a; --danger:#a33a32; --line:#d9ddd7; }
   * { box-sizing:border-box; }
@@ -35,7 +35,7 @@
 </head>
 <body>
 <main>
-  <h1>Impresora de etiquetas &middot; Eminent</h1>
+  <h1 id="titulo">Impresora de etiquetas</h1>
   <p class="estado" id="impresoraEstado">Buscando la impresora...</p>
 
   <div class="pestanas" role="tablist">
@@ -84,11 +84,22 @@
 </main>
 <script>
 'use strict';
-// Etiqueta de 45 x 25 mm a 203 dpi: 360 x 200 puntos. La app de Eminent manda
+// Etiqueta de 45 x 25 mm a 203 dpi: 360 x 200 puntos. La app (Eminent o Jade) manda
 // el nombre y el numero del codigo (sale del nombre, en la app); aca se eligen
 // copias, responsable y fecha, se dibuja en TSPL y se manda por USB.
 var ANCHO = 360;
 var ALTO = 200;
+
+// La empresa que va al pie: la dice el link (&m=); sin link, la del ultimo que llego.
+var MARCA = (function() {
+  var m = /[#&]m=([A-Z0-9]{1,20})(?:&|$)/.exec(location.hash);
+  try {
+    if (m) localStorage.setItem('etiquetasMarca', m[1]);
+    return m ? m[1] : localStorage.getItem('etiquetasMarca') || 'EMINENT';
+  } catch (error) {
+    return m ? m[1] : 'EMINENT';
+  }
+})();
 
 function registrar(texto) {
   var pre = document.getElementById('registro');
@@ -149,7 +160,7 @@ function tsplEtiqueta(et) {
   var x = Math.max(0, Math.round((ANCHO - anchoCodigo(codigo)) / 2));
   s += 'BARCODE ' + x + ',62,"128",60,0,0,3,3,"' + codigo + '"\r\n';
   s += textoCentrado(limpiar(et.p).slice(0, 30), 134, '2', 12);
-  s += textoCentrado('EMINENT', 162, '2', 12);
+  s += textoCentrado(MARCA, 162, '2', 12);
   s += 'PRINT 1,' + copias + '\r\n';
   return s;
 }
@@ -268,7 +279,8 @@ function leerLote() {
 // El catalogo queda guardado en esta tablet: sin conexion se sigue imprimiendo
 // cualquier producto. p: productos y q: produccion, cada uno [nombre, numero];
 // r: responsables; u: quien imprimio desde la app; t: cuando se guardo.
-var CLAVE_CATALOGO = 'eminentEtiquetasCatalogo';
+// Uno por empresa; el de Eminent conserva la clave que ya tenia.
+var CLAVE_CATALOGO = MARCA === 'EMINENT' ? 'eminentEtiquetasCatalogo' : 'etiquetasCatalogo' + MARCA;
 
 function catalogoGuardado() {
   try { return JSON.parse(localStorage.getItem(CLAVE_CATALOGO) || 'null'); } catch (error) { return null; }
@@ -434,6 +446,8 @@ function etiquetaNueva() {
 }
 
 (function iniciar() {
+  document.getElementById('titulo').textContent = 'Impresora de etiquetas · ' + MARCA;
+  document.title = 'Etiquetas ' + MARCA;
   var soporte = 'usb' in navigator;
   var politica = document.featurePolicy || document.permissionsPolicy;
   var permitido = politica ? politica.allowsFeature('usb') : soporte;
@@ -470,7 +484,7 @@ function etiquetaNueva() {
   document.getElementById('prueba').addEventListener('click', function() {
     var hoy = new Date();
     var fecha = String(hoy.getDate()).padStart(2, '0') + '/' + String(hoy.getMonth() + 1).padStart(2, '0') + '/' + hoy.getFullYear();
-    var tspl = tsplEtiqueta({ n: 'PRUEBA EMINENT', c: '2123456789', p: 'Prueba - ' + fecha, k: 1 });
+    var tspl = tsplEtiqueta({ n: 'PRUEBA ' + MARCA, c: '2123456789', p: 'Prueba - ' + fecha, k: 1 });
     registrar(tspl.trim());
     conBoton(this, 'estado', function() { return enviar(bytes(tspl)); });
   });
