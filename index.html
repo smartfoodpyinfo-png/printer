@@ -132,6 +132,8 @@ function anchoCodigo(codigo) {
   return ((simbolos + 3) * 11 + 2) * 3;
 }
 
+// De arriba abajo: nombre, codigo, "encargado - fecha" y la empresa. El numero no
+// se escribe: el lector lo lee de las barras.
 // et = { n: nombre, c: numero del codigo, p: "encargado - fecha", k: copias }
 function tsplEtiqueta(et) {
   var nombre = limpiar(et.n);
@@ -145,9 +147,9 @@ function tsplEtiqueta(et) {
   var s = 'SIZE 45 mm,25 mm\r\nGAP 2 mm,0 mm\r\nDIRECTION 1\r\nREFERENCE 0,0\r\nCLS\r\n';
   lineas.forEach(function(linea, i) { s += textoCentrado(linea, 6 + i * (alto + 2), fuente, letra); });
   var x = Math.max(0, Math.round((ANCHO - anchoCodigo(codigo)) / 2));
-  s += 'BARCODE ' + x + ',60,"128",64,0,0,3,3,"' + codigo + '"\r\n';
-  s += textoCentrado(codigo, 128, '2', 12);
-  s += textoCentrado(limpiar(et.p).slice(0, 30), 170, '2', 12);
+  s += 'BARCODE ' + x + ',62,"128",60,0,0,3,3,"' + codigo + '"\r\n';
+  s += textoCentrado(limpiar(et.p).slice(0, 30), 134, '2', 12);
+  s += textoCentrado('EMINENT', 162, '2', 12);
   s += 'PRINT 1,' + copias + '\r\n';
   return s;
 }
