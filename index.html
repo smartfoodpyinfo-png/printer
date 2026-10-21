@@ -18,7 +18,16 @@
   button:disabled { opacity:.55; }
   .estado { color:var(--muted); font-size:.92rem; margin:0; }
   .estado.error { color:var(--danger); font-weight:700; }
-  .lista { margin:0; padding-left:18px; }
+  /* Sin impresora conectada, su seccion va primero; conectada, baja al final. */
+  h1, #impresoraEstado { order:-2; }
+  #seccionImpresora { order:-1; }
+  #seccionImpresora.conectada { order:10; }
+  #seccionDetalle { order:20; }
+  .pestanas { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .pestanas button[aria-selected="true"] { background:var(--accent); color:#fff; }
+  .items { display:grid; gap:10px; }
+  .item { display:grid; gap:6px; padding-bottom:10px; border-bottom:1px solid var(--line); }
+  .item-campos { display:grid; grid-template-columns:110px 1fr; gap:8px; }
   pre { margin:0; max-height:220px; overflow:auto; background:#f7f7f5; border:1px solid var(--line); border-radius:8px; padding:8px; font-size:.78rem; white-space:pre-wrap; }
   label { display:grid; gap:4px; font-size:.92rem; font-weight:700; }
   input { min-height:44px; border:1px solid var(--line); border-radius:8px; padding:0 10px; font:inherit; font-weight:400; background:#fff; color:var(--ink); }
@@ -27,15 +36,23 @@
 <body>
 <main>
   <h1>Impresora de etiquetas &middot; Eminent</h1>
+  <p class="estado" id="impresoraEstado">Buscando la impresora...</p>
 
-  <section id="lote" hidden>
-    <h2>Etiquetas para imprimir</h2>
-    <ul class="lista" id="loteLista"></ul>
-    <button class="principal" id="imprimirLote" type="button">Imprimir</button>
+  <div class="pestanas" role="tablist">
+    <button type="button" role="tab" id="tabApp" data-panel="panelApp">Desde la app</button>
+    <button type="button" role="tab" id="tabNueva" data-panel="panelNueva">Nueva etiqueta</button>
+  </div>
+
+  <section id="panelApp" role="tabpanel" hidden>
+    <h2>Etiquetas desde la app</h2>
+    <p class="estado" id="loteVacio">Todavia no llego ninguna etiqueta desde la app.</p>
+    <div class="items" id="loteLista"></div>
+    <label id="loteFechaCampo" hidden>Fecha<input id="loteFecha" type="date"></label>
+    <button class="principal" id="imprimirLote" type="button" hidden>Imprimir</button>
     <p class="estado" id="loteEstado"></p>
   </section>
 
-  <section>
+  <section id="panelNueva" role="tabpanel" hidden>
     <h2>Nueva etiqueta</h2>
     <p class="estado" id="catalogoEstado"></p>
     <label>Buscar productos<input id="buscarProducto" list="listaProductos" autocomplete="off" placeholder="Mercader&iacute;a"></label>
@@ -44,13 +61,12 @@
     <datalist id="listaProduccion"></datalist>
     <label>Etiquetas<input id="cantidad" type="number" inputmode="numeric" min="1" max="200" step="1" value="1"></label>
     <label>Responsable<input id="responsable" list="listaResponsables" autocomplete="off"></label>
-    <datalist id="listaResponsables"></datalist>
     <label>Fecha<input id="fecha" type="date"></label>
     <button class="principal" id="imprimirNueva" type="button">Imprimir</button>
     <p class="estado" id="nuevaEstado"></p>
   </section>
 
-  <section>
+  <section id="seccionImpresora">
     <h2>Impresora USB</h2>
     <p class="estado" id="soporte"></p>
     <button id="conectar" type="button">Conectar impresora</button>
@@ -59,16 +75,18 @@
     <p class="estado" id="estado"></p>
   </section>
 
-  <section>
+  <section id="seccionDetalle">
     <h2>Detalle</h2>
     <pre id="registro"></pre>
   </section>
+  <!-- La usan las dos pestanas. -->
+  <datalist id="listaResponsables"></datalist>
 </main>
 <script>
 'use strict';
 // Etiqueta de 45 x 25 mm a 203 dpi: 360 x 200 puntos. La app de Eminent manda
-// cada etiqueta ya armada (nombre, numero del codigo, pie y copias): esta pagina
-// no calcula nada, solo la dibuja en TSPL y la manda por USB.
+// el nombre y el numero del codigo (sale del nombre, en la app); aca se eligen
+// copias, responsable y fecha, se dibuja en TSPL y se manda por USB.
 var ANCHO = 360;
 var ALTO = 200;
 
@@ -219,7 +237,8 @@ function conBoton(boton, idEstado, accion) {
 }
 
 // Datos que manda la app en el fragmento, base64 de JSON en UTF-8:
-// #d=[{n,c,p,k}] (las etiquetas) y, si la app tiene el catalogo, &c={p,q,r,u}.
+// #d=[{n,c,e,f,k}] (nombre, numero, responsable, fecha dd/mm/aaaa y copias) y, si
+// la app tiene el catalogo, &c={p,q,r,u}.
 function leerParte(clave) {
   var m = new RegExp('[#&]' + clave + '=([^&]+)').exec(location.hash);
   if (!m) return null;
@@ -234,9 +253,14 @@ function leerParte(clave) {
   }
 }
 
+// Un link de antes trae p = "responsable - fecha" en vez de e y f.
 function leerLote() {
   var lote = leerParte('d');
-  return Array.isArray(lote) && lote.length ? lote : null;
+  if (!Array.isArray(lote) || !lote.length) return null;
+  return lote.map(function(et) {
+    var viejo = String(et.p || '').split(' - ');
+    return { n: et.n, c: et.c, e: et.e != null ? et.e : viejo[0], f: et.f || viejo[1] || '', k: Math.max(0, Math.floor(Number(et.k)) || 0) };
+  });
 }
 
 // El catalogo queda guardado en esta tablet: sin conexion se sigue imprimiendo
@@ -263,15 +287,101 @@ function dos(n) { return (n < 10 ? '0' : '') + n; }
 function iso(fecha) { return fecha.getFullYear() + '-' + dos(fecha.getMonth() + 1) + '-' + dos(fecha.getDate()); }
 
 // De hoy a 4 dias atras. La pagina puede quedar abierta varios dias: al volver a
-// la pestana la fecha vuelve a hoy.
+// la pestana la fecha de Nueva etiqueta vuelve a hoy.
 function fechasDeHoy(volverAHoy) {
-  var campo = document.getElementById('fecha');
   var hoy = new Date();
   var minimo = new Date();
   minimo.setDate(minimo.getDate() - 4);
-  campo.min = iso(minimo);
-  campo.max = iso(hoy);
-  if (volverAHoy || !campo.value) campo.value = iso(hoy);
+  ['fecha', 'loteFecha'].forEach(function(id) {
+    var campo = document.getElementById(id);
+    campo.min = iso(minimo);
+    campo.max = iso(hoy);
+    if ((volverAHoy && id === 'fecha') || !campo.value) campo.value = iso(hoy);
+  });
+}
+
+// La fecha elegida como dd/mm/aaaa, o '' si esta fuera de rango.
+function fechaElegida(id) {
+  fechasDeHoy(false);
+  var campo = document.getElementById(id);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(campo.value) || campo.value < campo.min || campo.value > campo.max) return '';
+  var partes = campo.value.split('-');
+  return partes[2] + '/' + partes[1] + '/' + partes[0];
+}
+
+function campoDe(texto, atributos) {
+  var label = document.createElement('label');
+  label.textContent = texto;
+  var input = document.createElement('input');
+  Object.keys(atributos).forEach(function(nombre) { input.setAttribute(nombre, atributos[nombre]); });
+  label.appendChild(input);
+  return label;
+}
+
+// Pestana Desde la app: cada producto con sus copias y su responsable; una fecha
+// para todo el lote. Llegan como los mando la app y se pueden cambiar.
+function mostrarLote(lote) {
+  var lista = document.getElementById('loteLista');
+  lote.forEach(function(et, i) {
+    var item = document.createElement('div');
+    item.className = 'item';
+    var nombre = document.createElement('strong');
+    nombre.textContent = et.n;
+    var campos = document.createElement('div');
+    campos.className = 'item-campos';
+    campos.appendChild(campoDe('Etiquetas', { type: 'number', inputmode: 'numeric', min: '0', max: '200', step: '1', value: String(et.k), 'data-copias': String(i) }));
+    campos.appendChild(campoDe('Responsable', { list: 'listaResponsables', autocomplete: 'off', value: et.e || '', 'data-responsable': String(i) }));
+    item.appendChild(nombre);
+    item.appendChild(campos);
+    lista.appendChild(item);
+  });
+  var fecha = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(lote[0].f || '');
+  document.getElementById('loteFecha').value = fecha ? fecha[3] + '-' + fecha[2] + '-' + fecha[1] : '';
+  document.getElementById('loteVacio').hidden = true;
+  document.getElementById('loteFechaCampo').hidden = false;
+  document.getElementById('imprimirLote').hidden = false;
+}
+
+// Una linea en 0 no se imprime; en total, de 1 a 200 por impresion.
+function etiquetasDelLote(lote) {
+  var fecha = fechaElegida('loteFecha');
+  if (!fecha) return { error: 'La fecha tiene que ser de hoy o de los ultimos 4 dias.' };
+  var etiquetas = [];
+  var total = 0;
+  for (var i = 0; i < lote.length; i += 1) {
+    var copias = Number(document.querySelector('[data-copias="' + i + '"]').value);
+    if (!(copias >= 0 && copias <= 200 && Math.floor(copias) === copias)) return { error: 'Las etiquetas de ' + lote[i].n + ' tienen que ser entre 0 y 200.' };
+    if (!copias) continue;
+    var responsable = document.querySelector('[data-responsable="' + i + '"]').value.trim();
+    if (!responsable) return { error: 'Escribi el responsable de ' + lote[i].n + '.' };
+    total += copias;
+    etiquetas.push({ n: lote[i].n, c: lote[i].c, p: responsable + ' - ' + fecha, k: copias });
+  }
+  if (!total) return { error: 'No hay etiquetas para imprimir.' };
+  if (total > 200) return { error: 'Son ' + total + ' etiquetas: maximo 200 por impresion.' };
+  return { etiquetas: etiquetas };
+}
+
+function elegirPestana(id) {
+  ['tabApp', 'tabNueva'].forEach(function(tab) {
+    var boton = document.getElementById(tab);
+    boton.setAttribute('aria-selected', String(tab === id));
+    document.getElementById(boton.getAttribute('data-panel')).hidden = tab !== id;
+  });
+}
+
+// getDevices() solo devuelve impresoras ya autorizadas y enchufadas. Sin ninguna,
+// la seccion de la impresora va primero para conectarla.
+function actualizarImpresora(usb) {
+  var poner = function(dev, texto) {
+    document.getElementById('seccionImpresora').classList.toggle('conectada', !!dev);
+    mostrar('impresoraEstado', texto, !dev);
+  };
+  if (!usb) { poner(null, 'Este navegador no deja usar USB aca: abri esta pagina en Chrome.'); return; }
+  navigator.usb.getDevices().then(function(lista) {
+    if (lista.length) poner(lista[0], 'Impresora conectada: ' + (lista[0].productName || 'USB') + '.');
+    else poner(null, 'Impresora no conectada: enchufala y toca Conectar impresora.');
+  }, function() { poner(null, 'No se pudo ver la impresora.'); });
 }
 
 function mostrarCatalogo() {
@@ -316,13 +426,9 @@ function etiquetaNueva() {
   if (!(cantidad >= 1 && cantidad <= 200 && Math.floor(cantidad) === cantidad)) return { error: 'Las etiquetas tienen que ser entre 1 y 200.' };
   var responsable = document.getElementById('responsable').value.trim();
   if (!responsable) return { error: 'Escribi el responsable.' };
-  fechasDeHoy(false);
-  var campo = document.getElementById('fecha');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(campo.value) || campo.value < campo.min || campo.value > campo.max) {
-    return { error: 'La fecha tiene que ser de hoy o de los ultimos 4 dias.' };
-  }
-  var partes = campo.value.split('-');
-  return { etiqueta: { n: item[0], c: item[1], p: responsable + ' - ' + partes[2] + '/' + partes[1] + '/' + partes[0], k: cantidad } };
+  var fecha = fechaElegida('fecha');
+  if (!fecha) return { error: 'La fecha tiene que ser de hoy o de los ultimos 4 dias.' };
+  return { etiqueta: { n: item[0], c: item[1], p: responsable + ' - ' + fecha, k: cantidad } };
 }
 
 (function iniciar() {
@@ -332,6 +438,11 @@ function etiquetaNueva() {
   mostrar('soporte', soporte && permitido
     ? 'USB disponible en este navegador.'
     : 'Este navegador no deja usar USB aca. Abri esta pagina en Chrome.', !(soporte && permitido));
+  actualizarImpresora(soporte && permitido);
+  if (soporte && permitido) {
+    navigator.usb.addEventListener('connect', function() { actualizarImpresora(true); });
+    navigator.usb.addEventListener('disconnect', function() { actualizarImpresora(true); });
+  }
   ['conectar', 'prueba', 'autoprueba', 'imprimirLote', 'imprimirNueva'].forEach(function(id) {
     document.getElementById(id).disabled = !(soporte && permitido);
   });
@@ -345,6 +456,7 @@ function etiquetaNueva() {
       }).then(function() {
         registrar(describir(dev));
         mostrar('estado', 'Conectada: ' + (dev.productName || 'impresora USB') + '.', false);
+        actualizarImpresora(true);
         return dev.close();
       });
     }).catch(function(error) {
@@ -365,19 +477,17 @@ function etiquetaNueva() {
     conBoton(this, 'estado', function() { return enviar(bytes('SELFTEST\r\n')); });
   });
 
+  ['tabApp', 'tabNueva'].forEach(function(id) {
+    document.getElementById(id).addEventListener('click', function() { elegirPestana(id); });
+  });
   var lote = leerLote();
+  elegirPestana(lote ? 'tabApp' : 'tabNueva');
   if (lote) {
-    var total = lote.reduce(function(t, et) { return t + Math.max(1, Math.floor(Number(et.k)) || 1); }, 0);
-    document.getElementById('lote').hidden = false;
-    var lista = document.getElementById('loteLista');
-    lote.forEach(function(et) {
-      var li = document.createElement('li');
-      li.textContent = et.n + ' x ' + (Math.max(1, Math.floor(Number(et.k)) || 1));
-      lista.appendChild(li);
-    });
-    document.getElementById('imprimirLote').textContent = 'Imprimir ' + total + ' etiqueta(s)';
+    mostrarLote(lote);
     document.getElementById('imprimirLote').addEventListener('click', function() {
-      var tspl = lote.map(tsplEtiqueta).join('');
+      var armado = etiquetasDelLote(lote);
+      if (armado.error) { mostrar('loteEstado', armado.error, true); return; }
+      var tspl = armado.etiquetas.map(tsplEtiqueta).join('');
       conBoton(this, 'loteEstado', function() { return enviar(bytes(tspl)); });
     });
   }
