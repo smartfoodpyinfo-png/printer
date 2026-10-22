@@ -31,6 +31,12 @@
   pre { margin:0; max-height:220px; overflow:auto; background:#f7f7f5; border:1px solid var(--line); border-radius:8px; padding:8px; font-size:.78rem; white-space:pre-wrap; }
   label { display:grid; gap:4px; font-size:.92rem; font-weight:700; }
   input { min-height:44px; border:1px solid var(--line); border-radius:8px; padding:0 10px; font:inherit; font-weight:400; background:#fff; color:var(--ink); }
+  .aviso { display:grid; gap:8px; padding:10px; border:1px solid var(--line); border-radius:8px; background:#f7f7f5; }
+  .parecidos { display:flex; flex-wrap:wrap; gap:6px; }
+  .parecidos:empty { display:none; }
+  .parecidos button { min-height:40px; padding:0 12px; border:1px solid var(--accent); background:#fff; color:var(--accent); }
+  .check { display:flex; align-items:center; gap:8px; font-weight:400; }
+  .check input { min-height:0; width:22px; height:22px; flex:none; }
 </style>
 </head>
 <body>
@@ -59,6 +65,12 @@
     <datalist id="listaProductos"></datalist>
     <label>Buscar productos de producci&oacute;n<input id="buscarProduccion" list="listaProduccion" autocomplete="off" placeholder="Producci&oacute;n"></label>
     <datalist id="listaProduccion"></datalist>
+    <label>Texto libre<input id="textoLibre" autocomplete="off" placeholder="Cualquier texto"></label>
+    <div class="aviso" id="libreAviso" hidden>
+      <p class="estado" id="libreTexto"></p>
+      <div class="parecidos" id="libreParecidos"></div>
+      <label class="check" id="libreNuevoCampo" hidden><input type="checkbox" id="libreNuevo"> Es otro producto: imprimir igual (la app no lo va a reconocer al escanear)</label>
+    </div>
     <label>Etiquetas<input id="cantidad" type="number" inputmode="numeric" min="1" max="200" step="1" value="1"></label>
     <label>Responsable<input id="responsable" list="listaResponsables" autocomplete="off"></label>
     <label>Fecha<input id="fecha" type="date"></label>
@@ -294,7 +306,58 @@ function guardarCatalogo(catalogo) {
   history.replaceState(null, '', location.pathname + location.hash.replace(/&c=[^&]*/, ''));
 }
 
-function clave(texto) { return limpiar(texto).toUpperCase(); }
+// Mismo nombre normalizado y mismo numero que claveNombreEscaneo_ y etqCodigoProducto_
+// de la app (sin tildes, mayusculas, un solo espacio; 2 + 9 digitos del FNV-1a). Lo del
+// catalogo trae su numero hecho por la app; este solo lo usa el texto libre.
+function claveEscaneo(texto) {
+  return String(texto == null ? '' : texto).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+}
+
+function codigoProducto(nombre) {
+  var k = claveEscaneo(nombre);
+  var hash = 2166136261;
+  for (var i = 0; i < k.length; i += 1) hash = Math.imul(hash ^ k.charCodeAt(i), 16777619) >>> 0;
+  return '2' + String(hash % 1000000000).padStart(9, '0');
+}
+
+function distancia(a, b) {
+  var previa = [];
+  for (var j = 0; j <= b.length; j += 1) previa[j] = j;
+  for (var i = 1; i <= a.length; i += 1) {
+    var fila = [i];
+    for (var k = 1; k <= b.length; k += 1) {
+      fila[k] = Math.min(previa[k] + 1, fila[k - 1] + 1, previa[k - 1] + (a[i - 1] === b[k - 1] ? 0 : 1));
+    }
+    previa = fila;
+  }
+  return previa[b.length];
+}
+
+// Texto libre contra el catalogo. existe: ese nombre ya es un producto, y sale con su
+// numero, el que reconoce el lector. parecidos: hasta 5 nombres que se le parecen (uno
+// contiene al otro, hasta 2 letras distintas, o una palabra de 4 letras o mas en comun),
+// para que nadie imprima "TEQUENO" creyendo que es TEQUENOS: esa etiqueta no se leeria.
+function revisarTextoLibre(catalogo, texto) {
+  var k = claveEscaneo(texto);
+  var todos = [];
+  if (catalogo) {
+    catalogo.p.forEach(function(par) { todos.push({ par: par, lista: 'p', clave: claveEscaneo(par[0]) }); });
+    catalogo.q.forEach(function(par) { todos.push({ par: par, lista: 'q', clave: claveEscaneo(par[0]) }); });
+  }
+  var existe = k ? todos.filter(function(x) { return x.clave === k; })[0] || null : null;
+  if (!k || existe) return { existe: existe, parecidos: [] };
+  var palabras = k.split(' ').filter(function(p) { return p.length >= 4; });
+  var tope = Math.max(2, Math.floor(k.length / 5));
+  var parecidos = [];
+  todos.forEach(function(x) {
+    var d = distancia(k, x.clave);
+    var contiene = (k.length >= 3 && x.clave.indexOf(k) >= 0) || (x.clave.length >= 3 && k.indexOf(x.clave) >= 0);
+    var palabraComun = palabras.some(function(p) { return x.clave.split(' ').indexOf(p) >= 0; });
+    if (contiene || d <= tope || palabraComun) parecidos.push({ item: x, d: d });
+  });
+  parecidos.sort(function(a, b) { return a.d - b.d; });
+  return { existe: null, parecidos: parecidos.slice(0, 5).map(function(x) { return x.item; }) };
+}
 
 function dos(n) { return (n < 10 ? '0' : '') + n; }
 
@@ -344,7 +407,8 @@ function mostrarLote(lote) {
     var campos = document.createElement('div');
     campos.className = 'item-campos';
     campos.appendChild(campoDe('Etiquetas', { type: 'number', inputmode: 'numeric', min: '0', max: '200', step: '1', value: String(et.k), 'data-copias': String(i) }));
-    campos.appendChild(campoDe('Responsable', { list: 'listaResponsables', autocomplete: 'off', value: et.e || '', 'data-responsable': String(i) }));
+    // Vacio: lo escribe quien imprime (pedido asi).
+    campos.appendChild(campoDe('Responsable', { list: 'listaResponsables', autocomplete: 'off', 'data-responsable': String(i) }));
     item.appendChild(nombre);
     item.appendChild(campos);
     lista.appendChild(item);
@@ -412,10 +476,8 @@ function mostrarCatalogo() {
   opciones('listaProductos', catalogo && catalogo.p);
   opciones('listaProduccion', catalogo && catalogo.q);
   opciones('listaResponsables', catalogo && catalogo.r);
-  var responsable = document.getElementById('responsable');
-  if (catalogo && !responsable.value) responsable.value = catalogo.u || '';
   if (!catalogo) {
-    mostrar('catalogoEstado', 'Todavia no hay productos guardados: imprimi una vez desde la app con internet.', true);
+    mostrar('catalogoEstado', 'Todavia no hay productos guardados: imprimi una vez desde la app con internet, o usa Texto libre.', true);
     return;
   }
   var t = new Date(catalogo.t);
@@ -423,18 +485,59 @@ function mostrarCatalogo() {
     dos(t.getDate()) + '/' + dos(t.getMonth() + 1) + ' ' + dos(t.getHours()) + ':' + dos(t.getMinutes()) + ').', false);
 }
 
-// Mismas reglas que el formulario de la app: un producto del catalogo, de 1 a
-// 200 etiquetas, responsable y fecha de hoy a 4 dias atras.
+// El aviso debajo de Texto libre: si ya existe, si se parece a algo (con un boton por
+// parecido que lo lleva a su buscador) o si es nuevo.
+function mostrarRevisionLibre() {
+  var texto = document.getElementById('textoLibre').value;
+  var lista = document.getElementById('libreParecidos');
+  lista.textContent = '';
+  document.getElementById('libreNuevo').checked = false;
+  document.getElementById('libreAviso').hidden = !texto.trim();
+  if (!texto.trim()) return;
+  var revision = revisarTextoLibre(catalogoGuardado(), texto);
+  document.getElementById('libreNuevoCampo').hidden = !revision.parecidos.length;
+  if (revision.existe) {
+    mostrar('libreTexto', 'Ya existe: ' + revision.existe.par[0] + '. Sale con su codigo y la app la reconoce.', false);
+  } else if (!revision.parecidos.length) {
+    mostrar('libreTexto', 'No esta en la lista: la etiqueta sale, pero la app no la reconoce al escanear.', false);
+  } else {
+    mostrar('libreTexto', 'Se parece a productos que ya existen. Si es uno de estos, tocalo:', true);
+    revision.parecidos.forEach(function(x) {
+      var boton = document.createElement('button');
+      boton.type = 'button';
+      boton.textContent = x.par[0];
+      boton.setAttribute('data-nombre', x.par[0]);
+      boton.setAttribute('data-lista', x.lista);
+      lista.appendChild(boton);
+    });
+  }
+}
+
+// Un producto del catalogo, o texto libre; de 1 a 200 etiquetas, responsable y fecha de
+// hoy a 4 dias atras. El texto libre que ya es un producto sale como ese producto; si se
+// parece a uno, hay que elegirlo o marcar que es otro.
 function etiquetaNueva() {
   var catalogo = catalogoGuardado();
-  if (!catalogo) return { error: 'Todavia no hay productos guardados.' };
-  var enProduccion = !!document.getElementById('buscarProduccion').value.trim();
-  var buscado = document.getElementById(enProduccion ? 'buscarProduccion' : 'buscarProducto').value;
-  var k = clave(buscado);
-  if (!k) return { error: 'Elegi un producto.' };
-  var item = (enProduccion ? catalogo.q : catalogo.p).filter(function(par) { return clave(par[0]) === k; })[0];
-  if (!item) return { error: buscado + ' no esta en el catalogo de ' + (enProduccion ? 'produccion.' : 'productos.') };
-  var otro = catalogo.p.concat(catalogo.q).filter(function(par) { return par[1] === item[1] && clave(par[0]) !== k; })[0];
+  var libre = document.getElementById('textoLibre').value.trim();
+  var item;
+  if (libre) {
+    var revision = revisarTextoLibre(catalogo, libre);
+    if (revision.existe) item = revision.existe.par;
+    else if (revision.parecidos.length && !document.getElementById('libreNuevo').checked) {
+      return { error: 'Se parece a productos que ya existen: toca uno o marca "Es otro producto".' };
+    } else item = [libre, codigoProducto(libre)];
+  } else {
+    if (!catalogo) return { error: 'Todavia no hay productos guardados: usa Texto libre.' };
+    var enProduccion = !!document.getElementById('buscarProduccion').value.trim();
+    var buscado = document.getElementById(enProduccion ? 'buscarProduccion' : 'buscarProducto').value;
+    var k = claveEscaneo(buscado);
+    if (!k) return { error: 'Elegi un producto o escribi un texto libre.' };
+    item = (enProduccion ? catalogo.q : catalogo.p).filter(function(par) { return claveEscaneo(par[0]) === k; })[0];
+    if (!item) return { error: buscado + ' no esta en el catalogo de ' + (enProduccion ? 'produccion.' : 'productos.') };
+  }
+  var otro = catalogo ? catalogo.p.concat(catalogo.q).filter(function(par) {
+    return par[1] === item[1] && claveEscaneo(par[0]) !== claveEscaneo(item[0]);
+  })[0] : null;
   if (otro) return { error: item[0] + ' y ' + otro[0] + ' tienen el mismo codigo: hay que renombrar uno.' };
   var cantidad = Number(document.getElementById('cantidad').value);
   if (!(cantidad >= 1 && cantidad <= 200 && Math.floor(cantidad) === cantidad)) return { error: 'Las etiquetas tienen que ser entre 1 y 200.' };
@@ -512,17 +615,30 @@ function etiquetaNueva() {
   mostrarCatalogo();
   fechasDeHoy(true);
   document.addEventListener('visibilitychange', function() { if (!document.hidden) fechasDeHoy(true); });
-  // Un producto por etiqueta: escribir en un buscador vacia el otro.
-  [['buscarProducto', 'buscarProduccion'], ['buscarProduccion', 'buscarProducto']].forEach(function(par) {
-    document.getElementById(par[0]).addEventListener('input', function() {
-      if (this.value) document.getElementById(par[1]).value = '';
+  // Un producto por etiqueta: escribir en un campo vacia los otros dos.
+  var camposProducto = ['buscarProducto', 'buscarProduccion', 'textoLibre'];
+  camposProducto.forEach(function(id) {
+    document.getElementById(id).addEventListener('input', function() {
+      if (this.value) camposProducto.forEach(function(otro) { if (otro !== id) document.getElementById(otro).value = ''; });
+      mostrarRevisionLibre();
     });
+  });
+  // Tocar un parecido lo pasa a su buscador: se imprime como ese producto.
+  document.getElementById('libreParecidos').addEventListener('click', function(event) {
+    var boton = event.target.closest('button');
+    if (!boton) return;
+    document.getElementById(boton.getAttribute('data-lista') === 'q' ? 'buscarProduccion' : 'buscarProducto').value = boton.getAttribute('data-nombre');
+    document.getElementById('textoLibre').value = '';
+    mostrarRevisionLibre();
   });
   document.getElementById('imprimirNueva').addEventListener('click', function() {
     var armado = etiquetaNueva();
     if (armado.error) { mostrar('nuevaEstado', armado.error, true); return; }
     var tspl = tsplEtiqueta(armado.etiqueta);
-    conBoton(this, 'nuevaEstado', function() { return enviar(bytes(tspl)); });
+    // El responsable se vuelve a escribir en cada impresion.
+    conBoton(this, 'nuevaEstado', function() {
+      return enviar(bytes(tspl)).then(function() { document.getElementById('responsable').value = ''; });
+    });
   });
 
   // Modo sin conexion: sw.js guarda esta pagina; persist() pide que Android no
