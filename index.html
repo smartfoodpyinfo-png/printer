@@ -213,11 +213,24 @@ function canalSalida(dev) {
   return elegido;
 }
 
+// Android le saca el permiso a Chrome cuando la impresora se desenchufa, o se lo da a otra
+// app (NokoPrint) si quedo como la de por defecto: open() falla con "Access denied". Se pide
+// de nuevo con la lista de Chrome, filtrada a esa impresora; todavia cuenta el toque de Imprimir.
+function abrir(dev) {
+  if (dev.opened) return Promise.resolve(dev);
+  return dev.open().then(function() { return dev; }, function(error) {
+    if (error.name !== 'SecurityError') throw error;
+    registrar('Android nego el acceso (' + error.message + '): se pide permiso de nuevo.');
+    return navigator.usb.requestDevice({ filters: [{ vendorId: dev.vendorId, productId: dev.productId }] }).then(function(otra) {
+      return otra.open().then(function() { return otra; });
+    });
+  });
+}
+
 function enviar(datos) {
   var dev, canal;
-  return obtenerImpresora().then(function(d) {
+  return obtenerImpresora().then(abrir).then(function(d) {
     dev = d;
-    return dev.opened ? null : dev.open();
   }).then(function() {
     return dev.configuration === null ? dev.selectConfiguration(1) : null;
   }).then(function() {
@@ -246,6 +259,11 @@ function enviar(datos) {
 
 function explicar(error) {
   if (error.name === 'NotFoundError') return 'No se eligio ninguna impresora.';
+  if (error.name === 'SecurityError' && /access denied/i.test(error.message)) {
+    return 'Android no dejo usar la impresora. Cerra NokoPrint u otras apps de impresion y las otras pestanas de esta pagina, ' +
+      'desenchufa y volve a enchufar la impresora, toca Conectar impresora y acepta el permiso.';
+  }
+  if (error.name === 'SecurityError' && /user gesture/i.test(error.message)) return 'Toca Imprimir de nuevo.';
   if (error.name === 'SecurityError') return 'El navegador bloqueo el USB en esta pagina. Usa Chrome.';
   return error.message || String(error);
 }
