@@ -353,7 +353,9 @@ function explicar(error) {
       'desenchufa y volve a enchufar la impresora, toca Conectar impresora y acepta el permiso.';
   }
   if (error.name === 'SecurityError' && /user gesture/i.test(error.message)) return 'Toca Imprimir de nuevo.';
-  if (error.name === 'SecurityError') return 'El navegador bloqueo el USB en esta pagina. Usa Chrome.';
+  if (error.name === 'SecurityError' && /permissions policy|disallowed/i.test(error.message)) return 'El navegador bloqueo el USB en esta pagina. Usa Chrome.';
+  // Otro bloqueo: lo que dijo el navegador. "Usa Chrome" confundia a quien ya lo usa.
+  if (error.name === 'SecurityError') return 'El navegador no dejo usar la impresora: ' + error.message;
   return error.message || String(error);
 }
 
