@@ -37,17 +37,17 @@
   .parecidos button { min-height:40px; padding:0 12px; border:1px solid var(--accent); background:#fff; color:var(--accent); }
   .check { display:flex; align-items:center; gap:8px; font-weight:400; }
   .check input { min-height:0; width:22px; height:22px; flex:none; }
-  /* Hoja de Windows: solo existe al imprimir, una pagina de 45 x 25 mm por etiqueta. */
+  /* Hoja de Windows: solo existe al imprimir, una pagina de 60 x 30 mm por etiqueta. */
   #hoja { display:none; }
-  .etq { width:45mm; height:24.5mm; box-sizing:border-box; padding:1.2mm 1.5mm; overflow:hidden; display:flex; flex-direction:column; align-items:center; justify-content:space-between; break-after:page; page-break-after:always; font-family:Arial, Helvetica, sans-serif; color:#000; background:#fff; }
+  .etq { width:60mm; height:29.5mm; box-sizing:border-box; padding:1.2mm 2mm; overflow:hidden; display:flex; flex-direction:column; align-items:center; justify-content:space-between; break-after:page; page-break-after:always; font-family:Arial, Helvetica, sans-serif; color:#000; background:#fff; }
   .etq:last-child { break-after:auto; page-break-after:auto; }
-  .etq-nombre { width:100%; max-height:7.4mm; overflow:hidden; font-weight:800; line-height:1.1; text-align:center; overflow-wrap:anywhere; }
+  .etq-nombre { width:100%; max-height:9mm; overflow:hidden; font-weight:800; line-height:1.1; text-align:center; overflow-wrap:anywhere; }
   .etq svg { display:block; flex:none; }
   .etq rect { fill:#000; }
-  .etq-pie { width:100%; font-size:6pt; line-height:1.15; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .etq-pie { width:100%; font-size:8pt; line-height:1.15; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .etq-marca { font-weight:700; }
   @media print {
-    @page { size:45mm 25mm; margin:0; }
+    @page { size:60mm 30mm; margin:0; }
     body.imprimiendo { margin:0; background:#fff; }
     body.imprimiendo > *:not(#hoja) { display:none !important; }
     body.imprimiendo #hoja { display:block; }
@@ -112,11 +112,13 @@
 <div id="hoja"></div>
 <script>
 'use strict';
-// Etiqueta de 45 x 25 mm a 203 dpi: 360 x 200 puntos. La app (Eminent o Jade) manda
+// Etiqueta de 60 x 30 mm a 203 dpi: 480 x 240 puntos. La app (Eminent o Jade) manda
 // el nombre y el numero del codigo (sale del nombre, en la app); aca se eligen
 // copias, responsable y fecha, se dibuja en TSPL y se manda por USB.
-var ANCHO = 360;
-var ALTO = 200;
+var ANCHO = 480;
+var ALTO = 240;
+// Ancho de una barra fina del codigo, en puntos: 4 = 0.5 mm.
+var MODULO = 4;
 
 // La empresa que va al pie: la dice el link (&m=); sin link, la del ultimo que llego.
 var MARCA = (function() {
@@ -165,10 +167,10 @@ function textoCentrado(texto, y, fuente, anchoLetra) {
 }
 
 // Code 128: 11 modulos por simbolo (mas 2 del stop); con digitos de largo par
-// la impresora usa el subset C (dos digitos por simbolo). Modulo de 3 puntos.
+// la impresora usa el subset C (dos digitos por simbolo).
 function anchoCodigo(codigo) {
   var simbolos = /^\d+$/.test(codigo) && codigo.length % 2 === 0 ? codigo.length / 2 : codigo.length;
-  return ((simbolos + 3) * 11 + 2) * 3;
+  return ((simbolos + 3) * 11 + 2) * MODULO;
 }
 
 // De arriba abajo: nombre, codigo, "encargado - fecha" y la empresa. El numero no
@@ -178,17 +180,18 @@ function tsplEtiqueta(et) {
   var nombre = limpiar(et.n);
   var codigo = limpiar(et.c);
   var copias = Math.max(1, Math.min(200, Math.floor(Number(et.k)) || 1));
-  var corto = nombre.length <= 22;
-  var fuente = corto ? '3' : '2';
-  var letra = corto ? 16 : 12;
-  var alto = corto ? 24 : 20;
-  var lineas = partir(nombre, corto ? 22 : 30);
-  var s = 'SIZE 45 mm,25 mm\r\nGAP 2 mm,0 mm\r\nDIRECTION 1\r\nREFERENCE 0,0\r\nCLS\r\n';
-  lineas.forEach(function(linea, i) { s += textoCentrado(linea, 6 + i * (alto + 2), fuente, letra); });
+  // Nombre corto en la fuente 4 (24 x 32 puntos, 20 letras por linea); largo en la 3 (16 x 24, 30).
+  var corto = nombre.length <= 20;
+  var fuente = corto ? '4' : '3';
+  var letra = corto ? 24 : 16;
+  var alto = corto ? 32 : 24;
+  var lineas = partir(nombre, corto ? 20 : 30);
+  var s = 'SIZE 60 mm,30 mm\r\nGAP 2 mm,0 mm\r\nDIRECTION 1\r\nREFERENCE 0,0\r\nCLS\r\n';
+  lineas.forEach(function(linea, i) { s += textoCentrado(linea, 8 + i * (alto + 2), fuente, letra); });
   var x = Math.max(0, Math.round((ANCHO - anchoCodigo(codigo)) / 2));
-  s += 'BARCODE ' + x + ',62,"128",60,0,0,3,3,"' + codigo + '"\r\n';
-  s += textoCentrado(limpiar(et.p).slice(0, 30), 134, '2', 12);
-  s += textoCentrado(MARCA, 162, '2', 12);
+  s += 'BARCODE ' + x + ',84,"128",70,0,0,' + MODULO + ',' + MODULO + ',"' + codigo + '"\r\n';
+  s += textoCentrado(limpiar(et.p).slice(0, 30), 164, '3', 16);
+  s += textoCentrado(MARCA, 200, '3', 16);
   s += 'PRINT 1,' + copias + '\r\n';
   return s;
 }
@@ -224,7 +227,7 @@ function simbolos128C(codigo) {
   return s;
 }
 
-// Un rect por barra y 10 modulos de zona muda a cada lado; 0.375 mm por modulo son 3 puntos
+// Un rect por barra y 10 modulos de zona muda a cada lado; 0.5 mm por modulo son 4 puntos
 // exactos a 203 dpi, el mismo ancho que el TSPL.
 function codigoBarrasSvg(codigo) {
   var x = 10;
@@ -237,7 +240,7 @@ function codigoBarrasSvg(codigo) {
       x += ancho;
     }
   });
-  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + (x + 10) + ' 1" width="' + ((x + 10) * 0.375) + 'mm" height="9mm"' +
+  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + (x + 10) + ' 1" width="' + ((x + 10) * MODULO / 8) + 'mm" height="10mm"' +
     ' preserveAspectRatio="none" shape-rendering="crispEdges">' + rects + '</svg>';
 }
 
@@ -249,7 +252,7 @@ function esc(texto) {
 function hojaHtml(etiquetas) {
   return etiquetas.map(function(et) {
     var largo = String(et.n || '').length;
-    var puntos = largo <= 16 ? 9 : largo <= 24 ? 8 : largo <= 34 ? 7 : 6;
+    var puntos = largo <= 16 ? 12 : largo <= 24 ? 11 : largo <= 34 ? 9 : 8;
     var una = '<div class="etq"><div class="etq-nombre" style="font-size:' + puntos + 'pt">' + esc(et.n) + '</div>' +
       codigoBarrasSvg(et.c) + '<div class="etq-pie">' + esc(et.p) + '</div><div class="etq-pie etq-marca">' + esc(MARCA) + '</div></div>';
     var copias = Math.max(1, Math.min(200, Math.floor(Number(et.k)) || 1));
@@ -580,7 +583,7 @@ function actualizarImpresora(usb) {
   };
   if (esWindows()) {
     document.getElementById('seccionImpresora').classList.add('conectada');
-    mostrar('impresoraEstado', 'En Windows se imprime con el dialogo de impresion: elegi la impresora de etiquetas, papel 45 x 25 mm, margenes Ninguno y escala 100 %.', false);
+    mostrar('impresoraEstado', 'En Windows se imprime con el dialogo de impresion: elegi la impresora de etiquetas, papel 60 x 30 mm, margenes Ninguno y escala 100 %.', false);
     return;
   }
   if (!usb) { poner(null, 'Este navegador no deja usar USB aca: abri esta pagina en Chrome.'); return; }
