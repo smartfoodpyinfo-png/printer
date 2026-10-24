@@ -528,8 +528,8 @@ function mostrarLote(lote) {
     var campos = document.createElement('div');
     campos.className = 'item-campos';
     campos.appendChild(campoDe('Etiquetas', { type: 'number', inputmode: 'numeric', min: '0', max: '200', step: '1', value: String(et.k), 'data-copias': String(i) }));
-    // Vacio: lo escribe quien imprime (pedido asi).
-    campos.appendChild(campoDe('Responsable', { list: 'listaResponsables', autocomplete: 'off', 'data-responsable': String(i) }));
+    // Llega el que eligio la app; se puede cambiar. Sin responsable, queda vacio.
+    campos.appendChild(campoDe('Responsable', { list: 'listaResponsables', autocomplete: 'off', 'data-responsable': String(i), value: String(et.e || '') }));
     item.appendChild(nombre);
     item.appendChild(campos);
     lista.appendChild(item);
