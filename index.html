@@ -72,6 +72,7 @@
     <p class="estado" id="loteVacio">Todavia no llego ninguna etiqueta desde la app.</p>
     <div class="items" id="loteLista"></div>
     <label id="loteFechaCampo" hidden>Fecha<input id="loteFecha" type="date"></label>
+    <label id="loteResponsableRegistroCampo" hidden>Responsable del registro<input id="loteResponsableRegistro" list="listaResponsables" autocomplete="off" maxlength="120"></label>
     <button class="principal" id="imprimirLote" type="button" hidden>Imprimir</button>
     <p class="estado" id="loteEstado"></p>
   </section>
@@ -336,9 +337,9 @@ function abrir(dev) {
   });
 }
 
-function enviar(datos) {
+function enviar(datos, preparada) {
   var dev, canal;
-  return obtenerImpresora().then(abrir).then(function(d) {
+  return (preparada ? Promise.resolve(preparada) : obtenerImpresora().then(abrir)).then(function(d) {
     dev = d;
   }).then(function() {
     return dev.configuration === null ? dev.selectConfiguration(1) : null;
@@ -357,6 +358,7 @@ function enviar(datos) {
     return dev.transferOut(canal.ep.endpointNumber, datos);
   }).then(function(resultado) {
     registrar('Enviado: ' + resultado.bytesWritten + ' bytes, estado ' + resultado.status);
+    if (resultado.status !== 'ok' || resultado.bytesWritten !== datos.byteLength) throw new Error('El envio USB quedo incompleto. El registro es una solicitud de impresion; revisa las etiquetas antes de repetir.');
     return dev.releaseInterface(canal.intf.interfaceNumber).catch(function() {});
   }).then(function() {
     return dev.close().catch(function() {});
@@ -379,8 +381,92 @@ function explicar(error) {
   return error.message || String(error);
 }
 
+// Direcciones de las implementaciones existentes. No son credenciales.
+var REGISTRO_ETIQUETAS_URLS = {
+  JADE: 'https://script.google.com/macros/s/AKfycbxJ_TU_kRnmLmsrBTvHb3NLOkH7gkta-bUBtIBLFAVZHDD1zZgFVcJN5VR3uOCsrqsh/exec',
+  EMINENT: 'https://script.google.com/macros/s/AKfycbyhgmNr_h5aI7Fp70Xtd2NacOMy7E_k_BnGfU5DYH_EEg7srEjcr8wLt2GGcWf8gKTs/exec'
+};
+var intentosEtiquetas = {};
+
+function registrarEtiquetado(etiquetas, origen) {
+  var url = REGISTRO_ETIQUETAS_URLS[MARCA];
+  if (!url) return Promise.reject(new Error('Empresa de etiquetas no reconocida. Abri las etiquetas desde Jade o Eminent.'));
+  var lineas = etiquetas.map(function(et) {
+    var pie = /^(.*) - (\d{2}\/\d{2}\/\d{4})$/.exec(et.p || '');
+    var hoy = new Date();
+    var responsable = et.s === true ? document.getElementById('loteResponsableRegistro').value.trim() : pie && pie[1].trim();
+    if (!responsable) throw new Error('Escribi el responsable del registro.');
+    return { producto: et.n, cantidad: et.k, responsable: responsable,
+      fecha: pie ? pie[2] : dos(hoy.getDate()) + '/' + dos(hoy.getMonth() + 1) + '/' + hoy.getFullYear() };
+  });
+  var clave = 'etiquetasEnvio_' + MARCA + '_' + origen;
+  var huella = JSON.stringify(lineas), intento = intentosEtiquetas[clave];
+  if (!intento) {
+    try { intento = JSON.parse(sessionStorage.getItem(clave) || 'null'); } catch (ignored) {}
+  }
+  if (!intento || JSON.stringify(intento.lineas) !== huella) {
+    var azar = new Uint8Array(16);
+    crypto.getRandomValues(azar);
+    var id = Array.prototype.map.call(azar, function(n) { return ('0' + n.toString(16)).slice(-2); }).join('');
+    intento = { accion: 'REGISTRAR_ETIQUETAS', empresa: MARCA, requestId: id, lineas: lineas };
+  }
+  intentosEtiquetas[clave] = intento;
+  try { sessionStorage.setItem(clave, JSON.stringify(intento)); } catch (ignoredSave) {}
+  var control = new AbortController();
+  var timer = setTimeout(function() { control.abort(); }, 20000);
+  var limpiar = function() {
+    delete intentosEtiquetas[clave];
+    try { sessionStorage.removeItem(clave); } catch (ignoredRemove) {}
+  };
+  // text/plain evita el preflight. Se exige respuesta JSON: no-cors no confirmaria la escritura.
+  return fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+    body: JSON.stringify(intento), credentials: 'omit', redirect: 'follow', signal: control.signal
+  }).then(function(response) {
+    if (!response.ok) throw new Error('No se pudo confirmar el registro. Reintenta con los mismos datos.');
+    return response.json();
+  }).then(function(result) {
+    if (!result || result.ok !== true) {
+      // Errores de dominio sin escritura: una correccion o un turno nuevo es otro intento.
+      if (result && ['PRODUCCION_TURNO_CERRADO', 'ETIQUETAS_INVALIDAS', 'REQUEST_ID_REQUIRED', 'ETIQUETAS_INTENTO_CAMBIO'].indexOf(result.code) !== -1) limpiar();
+      var error = new Error(result && result.mensaje || 'No se pudo registrar el etiquetado.');
+      error.registroEtiquetas = true;
+      throw error;
+    }
+    if (result.empresa !== MARCA || result.requestId !== intento.requestId || !result.turnoId || result.filas !== lineas.length) {
+      throw new Error('No se pudo confirmar el registro. Reintenta con los mismos datos.');
+    }
+    limpiar();
+    registrar('Solicitud registrada en ' + MARCA + ': ' + lineas.length + ' producto(s).');
+    return result;
+  }).catch(function(error) {
+    if (error.registroEtiquetas) throw error;
+    throw new Error('No se pudo confirmar el registro en ' + MARCA + '. Hace falta conexion. Reintenta con los mismos datos.');
+  }).then(function(result) { clearTimeout(timer); return result; }, function(error) { clearTimeout(timer); throw error; });
+}
+
 // Windows: dialogo de impresion. El resto (la tablet): TSPL por USB.
-function imprimir(boton, idEstado, etiquetas, despues) {
+// Las etiquetas reales se registran antes de enviar; la prueba tecnica no crea movimientos.
+function imprimir(boton, idEstado, etiquetas, despues, registrarTurno) {
+  if (registrarTurno) {
+    conBoton(boton, idEstado, function() {
+      var dev = null, registrado = false;
+      // Pedir permiso USB dentro del toque, antes de esperar a Sheets.
+      var preparada = esWindows() ? Promise.resolve(null) : obtenerImpresora().then(abrir);
+      return preparada.then(function(d) {
+        dev = d;
+        return registrarEtiquetado(etiquetas, idEstado);
+      }).then(function() {
+        registrado = true;
+        if (esWindows()) { imprimirConDialogo(etiquetas); return; }
+        return enviar(bytes(etiquetas.map(tsplEtiqueta).join('')), dev);
+      }).then(function() { if (despues) despues(); }).catch(function(error) {
+        if (dev && dev.opened) dev.close().catch(function() {});
+        if (registrado) error.message = 'La solicitud quedo registrada. ' + explicar(error) + ' Revisa el papel antes de repetir.';
+        throw error;
+      });
+    });
+    return;
+  }
   if (esWindows()) {
     imprimirConDialogo(etiquetas);
     mostrar(idEstado, '', false);
@@ -396,7 +482,9 @@ function imprimir(boton, idEstado, etiquetas, despues) {
 function conBoton(boton, idEstado, accion) {
   boton.disabled = true;
   mostrar(idEstado, 'Enviando...', false);
-  accion().then(function() {
+  var resultado;
+  try { resultado = accion(); } catch (error) { resultado = Promise.reject(error); }
+  return Promise.resolve(resultado).then(function() {
     mostrar(idEstado, 'Listo.', false);
   }).catch(function(error) {
     registrar('Error ' + error.name + ': ' + error.message);
@@ -433,8 +521,8 @@ function leerLote() {
   });
 }
 
-// El catalogo queda guardado en esta tablet: sin conexion se sigue imprimiendo
-// cualquier producto. p: productos y q: produccion, cada uno [nombre, numero];
+// El catalogo queda guardado en esta tablet; imprimir exige registrar con conexion.
+// p: productos y q: produccion, cada uno [nombre, numero];
 // r: responsables; u: quien imprimio desde la app; t: cuando se guardo.
 // Uno por empresa; el de Eminent conserva la clave que ya tenia.
 var CLAVE_CATALOGO = MARCA === 'EMINENT' ? 'eminentEtiquetasCatalogo' : 'etiquetasCatalogo' + MARCA;
@@ -568,6 +656,7 @@ function mostrarLote(lote) {
   document.getElementById('loteFecha').value = fecha ? fecha[3] + '-' + fecha[2] + '-' + fecha[1] : '';
   document.getElementById('loteVacio').hidden = true;
   document.getElementById('loteFechaCampo').hidden = lote.every(function(et) { return et.s === true; });
+  document.getElementById('loteResponsableRegistroCampo').hidden = !lote.some(function(et) { return et.s === true; });
   document.getElementById('imprimirLote').hidden = false;
 }
 
@@ -773,7 +862,7 @@ function etiquetaNueva() {
     document.getElementById('imprimirLote').addEventListener('click', function() {
       var armado = etiquetasDelLote(lote);
       if (armado.error) { mostrar('loteEstado', armado.error, true); return; }
-      imprimir(this, 'loteEstado', armado.etiquetas);
+      imprimir(this, 'loteEstado', armado.etiquetas, null, true);
     });
   }
 
@@ -801,7 +890,7 @@ function etiquetaNueva() {
     var armado = etiquetaNueva();
     if (armado.error) { mostrar('nuevaEstado', armado.error, true); return; }
     // El responsable se vuelve a escribir en cada impresion.
-    imprimir(this, 'nuevaEstado', [armado.etiqueta], function() { document.getElementById('responsable').value = ''; });
+    imprimir(this, 'nuevaEstado', [armado.etiqueta], function() { document.getElementById('responsable').value = ''; }, true);
   });
 
   // Modo sin conexion: sw.js guarda esta pagina; persist() pide que Android no

@@ -2,7 +2,7 @@
 // Modo sin conexion de la pagina de etiquetas. Primero la red, asi una version publicada se ve
 // en la primera apertura; sin red, o si la red no contesta en ESPERA_RED_MS (un wifi sin
 // internet), lo guardado. El catalogo no vive aca: va en localStorage.
-var CACHE = 'etiquetas-eminent-v1';
+var CACHE = 'etiquetas-registro-v2';
 var ESPERA_RED_MS = 3000;
 
 self.addEventListener('install', function(event) {
@@ -10,7 +10,7 @@ self.addEventListener('install', function(event) {
 });
 
 self.addEventListener('activate', function(event) {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(caches.delete('etiquetas-eminent-v1').then(function() { return self.clients.claim(); }));
 });
 
 self.addEventListener('fetch', function(event) {
