@@ -62,7 +62,8 @@
   <h1 id="titulo">Impresora de etiquetas</h1>
   <p class="estado" id="impresoraEstado">Buscando la impresora...</p>
 
-  <div class="pestanas" role="tablist">
+  <!-- Nueva etiqueta oculta: registraba sin sesion. Ver docs/2026-11-21-nueva-etiqueta-oculta.md -->
+  <div class="pestanas" role="tablist" hidden>
     <button type="button" role="tab" id="tabApp" data-panel="panelApp">Desde la app</button>
     <button type="button" role="tab" id="tabNueva" data-panel="panelNueva">Nueva etiqueta</button>
   </div>
@@ -388,6 +389,13 @@ var REGISTRO_ETIQUETAS_URLS = {
 };
 var intentosEtiquetas = {};
 
+// Permiso de impresion que manda la app en &a= (emitirPermisoEtiquetas). Vence en el
+// servidor; un link viejo sin permiso registra mientras el servidor lo acepte.
+function permisoImpresion() {
+  var m = /[#&]a=([0-9a-f-]{36})(?:&|$)/.exec(location.hash);
+  return m ? m[1] : '';
+}
+
 function registrarEtiquetado(etiquetas, origen) {
   var url = REGISTRO_ETIQUETAS_URLS[MARCA];
   if (!url) return Promise.reject(new Error('Empresa de etiquetas no reconocida. Abri las etiquetas desde Jade o Eminent.'));
@@ -410,6 +418,8 @@ function registrarEtiquetado(etiquetas, origen) {
     var id = Array.prototype.map.call(azar, function(n) { return ('0' + n.toString(16)).slice(-2); }).join('');
     intento = { accion: 'REGISTRAR_ETIQUETAS', empresa: MARCA, requestId: id, lineas: lineas };
   }
+  var permiso = permisoImpresion();
+  if (permiso) intento.permiso = permiso; else delete intento.permiso;
   intentosEtiquetas[clave] = intento;
   try { sessionStorage.setItem(clave, JSON.stringify(intento)); } catch (ignoredSave) {}
   var control = new AbortController();
@@ -427,7 +437,7 @@ function registrarEtiquetado(etiquetas, origen) {
   }).then(function(result) {
     if (!result || result.ok !== true) {
       // Errores de dominio sin escritura: una correccion o un turno nuevo es otro intento.
-      if (result && ['PRODUCCION_TURNO_CERRADO', 'ETIQUETAS_INVALIDAS', 'REQUEST_ID_REQUIRED', 'ETIQUETAS_INTENTO_CAMBIO'].indexOf(result.code) !== -1) limpiar();
+      if (result && ['PRODUCCION_TURNO_CERRADO', 'ETIQUETAS_INVALIDAS', 'REQUEST_ID_REQUIRED', 'ETIQUETAS_INTENTO_CAMBIO', 'ETIQUETAS_PERMISO_INVALIDO'].indexOf(result.code) !== -1) limpiar();
       var error = new Error(result && result.mensaje || 'No se pudo registrar el etiquetado.');
       error.registroEtiquetas = true;
       throw error;
@@ -532,7 +542,16 @@ function catalogoGuardado() {
 }
 
 function guardarCatalogo(catalogo) {
-  if (!catalogo || !Array.isArray(catalogo.p) || !Array.isArray(catalogo.q)) return;
+  if (!catalogo) return;
+  if (!Array.isArray(catalogo.p) || !Array.isArray(catalogo.q)) {
+    if (!Array.isArray(catalogo.r)) return;
+    var previo = catalogoGuardado() || {};
+    catalogo = {
+      p: Array.isArray(previo.p) ? previo.p : [],
+      q: Array.isArray(previo.q) ? previo.q : [],
+      r: catalogo.r
+    };
+  }
   catalogo.t = Date.now();
   try { localStorage.setItem(CLAVE_CATALOGO, JSON.stringify(catalogo)); } catch (error) { registrar('No se pudo guardar el catalogo: ' + error.message); }
   // Sin el catalogo en el link, recargar una pestana vieja no pisa uno mas nuevo.
@@ -856,7 +875,7 @@ function etiquetaNueva() {
     document.getElementById(id).addEventListener('click', function() { elegirPestana(id); });
   });
   var lote = leerLote();
-  elegirPestana(lote ? 'tabApp' : 'tabNueva');
+  elegirPestana('tabApp');
   if (lote) {
     mostrarLote(lote);
     document.getElementById('imprimirLote').addEventListener('click', function() {
