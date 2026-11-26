@@ -589,6 +589,8 @@ function distancia(a, b) {
 // numero, el que reconoce el lector. parecidos: hasta 5 nombres que se le parecen (uno
 // contiene al otro, hasta 2 letras distintas, o una palabra de 4 letras o mas en comun),
 // para que nadie imprima "TEQUENO" creyendo que es TEQUENOS: esa etiqueta no se leeria.
+// bloquea: alguno es casi igual o lo escrito esta adentro de su nombre (SARDO en QUESO
+// SARDO): hay que tocarlo, "Es otro producto" no lo salta. Esos van primero en la lista.
 function revisarTextoLibre(catalogo, texto) {
   var k = claveEscaneo(texto);
   var todos = [];
@@ -597,18 +599,24 @@ function revisarTextoLibre(catalogo, texto) {
     catalogo.q.forEach(function(par) { todos.push({ par: par, lista: 'q', clave: claveEscaneo(par[0]) }); });
   }
   var existe = k ? todos.filter(function(x) { return x.clave === k; })[0] || null : null;
-  if (!k || existe) return { existe: existe, parecidos: [] };
+  if (!k || existe) return { existe: existe, parecidos: [], bloquea: false };
   var palabras = k.split(' ').filter(function(p) { return p.length >= 4; });
   var tope = Math.max(2, Math.floor(k.length / 5));
   var parecidos = [];
   todos.forEach(function(x) {
     var d = distancia(k, x.clave);
-    var contiene = (k.length >= 3 && x.clave.indexOf(k) >= 0) || (x.clave.length >= 3 && k.indexOf(x.clave) >= 0);
+    var cercano = d <= tope || (k.length >= 3 && x.clave.indexOf(k) >= 0);
+    var agrega = x.clave.length >= 3 && k.indexOf(x.clave) >= 0;
     var palabraComun = palabras.some(function(p) { return x.clave.split(' ').indexOf(p) >= 0; });
-    if (contiene || d <= tope || palabraComun) parecidos.push({ item: x, d: d });
+    if (cercano || agrega || palabraComun) parecidos.push({ item: x, d: d, cercano: cercano });
   });
-  parecidos.sort(function(a, b) { return a.d - b.d; });
-  return { existe: null, parecidos: parecidos.slice(0, 5).map(function(x) { return x.item; }) };
+  parecidos.sort(function(a, b) { return ((b.cercano ? 1 : 0) - (a.cercano ? 1 : 0)) || (a.d - b.d); });
+  parecidos = parecidos.slice(0, 5);
+  return {
+    existe: null,
+    parecidos: parecidos.map(function(x) { return x.item; }),
+    bloquea: !!(parecidos[0] && parecidos[0].cercano)
+  };
 }
 
 function dos(n) { return (n < 10 ? '0' : '') + n; }
@@ -769,13 +777,14 @@ function mostrarRevisionLibre() {
   document.getElementById('libreAviso').hidden = !texto.trim();
   if (!texto.trim()) return;
   var revision = revisarTextoLibre(catalogoGuardado(), texto);
-  document.getElementById('libreNuevoCampo').hidden = !revision.parecidos.length;
+  document.getElementById('libreNuevoCampo').hidden = !revision.parecidos.length || revision.bloquea;
   if (revision.existe) {
     mostrar('libreTexto', 'Ya existe: ' + revision.existe.par[0] + '. Sale con su codigo y la app la reconoce.', false);
   } else if (!revision.parecidos.length) {
     mostrar('libreTexto', 'No esta en la lista: la etiqueta sale, pero la app no la reconoce al escanear.', false);
   } else {
-    mostrar('libreTexto', 'Se parece a productos que ya existen. Si es uno de estos, tocalo:', true);
+    mostrar('libreTexto', revision.bloquea ? 'Es casi igual a un producto que ya existe: toca el correcto.' :
+      'Se parece a productos que ya existen. Si es uno de estos, tocalo:', true);
     revision.parecidos.forEach(function(x) {
       var boton = document.createElement('button');
       boton.type = 'button';
@@ -788,8 +797,8 @@ function mostrarRevisionLibre() {
 }
 
 // Un producto del catalogo, o texto libre; de 1 a 200 etiquetas, responsable y fecha de
-// hoy a 4 dias atras. El texto libre que ya es un producto sale como ese producto; si se
-// parece a uno, hay que elegirlo o marcar que es otro.
+// hoy a 4 dias atras. El texto libre que ya es un producto sale como ese producto; casi
+// igual a uno hay que elegirlo; si solo se le parece, elegirlo o marcar que es otro.
 function etiquetaNueva() {
   var catalogo = catalogoGuardado();
   var libre = document.getElementById('textoLibre').value.trim();
@@ -797,6 +806,7 @@ function etiquetaNueva() {
   if (libre) {
     var revision = revisarTextoLibre(catalogo, libre);
     if (revision.existe) item = revision.existe.par;
+    else if (revision.bloquea) return { error: 'Es casi igual a un producto que ya existe: toca el correcto.' };
     else if (revision.parecidos.length && !document.getElementById('libreNuevo').checked) {
       return { error: 'Se parece a productos que ya existen: toca uno o marca "Es otro producto".' };
     } else item = [libre, codigoProducto(libre)];
@@ -908,8 +918,12 @@ function etiquetaNueva() {
   document.getElementById('imprimirNueva').addEventListener('click', function() {
     var armado = etiquetaNueva();
     if (armado.error) { mostrar('nuevaEstado', armado.error, true); return; }
-    // El responsable se vuelve a escribir en cada impresion.
-    imprimir(this, 'nuevaEstado', [armado.etiqueta], function() { document.getElementById('responsable').value = ''; }, true);
+    // El responsable y el texto libre se vuelven a escribir en cada impresion.
+    imprimir(this, 'nuevaEstado', [armado.etiqueta], function() {
+      document.getElementById('responsable').value = '';
+      document.getElementById('textoLibre').value = '';
+      mostrarRevisionLibre();
+    }, true);
   });
 
   // Modo sin conexion: sw.js guarda esta pagina; persist() pide que Android no
